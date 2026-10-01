@@ -120,6 +120,7 @@ EVENT_VARIABLES: dict[str, list[str]] = {
 SAMPLE_DATA: dict[str, dict[str, str]] = {
     "print_start": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "filename": "Benchy.3mf",
         "estimated_time": "1h 23m",
         "eta": "15:53",
@@ -128,6 +129,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "print_complete": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "filename": "Benchy.3mf",
         "duration": "1h 18m",
         "filament_grams": "15.2",
@@ -138,6 +140,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "print_failed": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "filename": "Benchy.3mf",
         "duration": "0h 45m",
         "filament_grams": "7.6",
@@ -150,6 +153,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "print_stopped": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "filename": "Benchy.3mf",
         "duration": "0h 30m",
         "filament_grams": "4.6",
@@ -161,6 +165,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "print_progress": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "filename": "Benchy.3mf",
         "progress": "50",
         "remaining_time": "0h 41m",
@@ -170,6 +175,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "print_missing_spool_assignment": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "missing_slots": "A1, A3",
         "missing_slot_details": "- A1: PLA Basic\n- A3: PETG HF",
         "timestamp": "2024-01-15 14:30",
@@ -177,6 +183,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "billing_charge_failed": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "filename": "Benchy.3mf",
         "archive_id": "123",
         "error": "The transaction could not be persisted",
@@ -185,11 +192,13 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "printer_offline": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "timestamp": "2024-01-15 14:30",
         "app_name": "Bambuddy",
     },
     "printer_error": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "error_type": "AMS Error",
         "error_detail": "Filament slot 1 jammed",
         "timestamp": "2024-01-15 14:30",
@@ -197,6 +206,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "filament_low": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "slot": "1",
         "remaining_percent": "15",
         "color": "Black PLA",
@@ -205,12 +215,14 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "maintenance_due": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "items": "• Nozzle cleaning (OVERDUE)\n• Carbon rod lubrication (Soon)",
         "timestamp": "2024-01-15 14:30",
         "app_name": "Bambuddy",
     },
     "ams_humidity_high": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "ams_label": "AMS-A",
         "humidity": "75",
         "threshold": "60",
@@ -219,6 +231,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "ams_temperature_high": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "ams_label": "AMS-A",
         "temperature": "42",
         "threshold": "35",
@@ -227,6 +240,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "ams_drying_suspended": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "ams_label": "AMS-A",
         "humidity": "16",
         "threshold": "14",
@@ -236,6 +250,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "bed_cooled": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "bed_temp": "34",
         "threshold": "35",
         "filename": "Benchy",
@@ -244,6 +259,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "ha_sensor_alert": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "sensor": "Enclosure Door",
         "state": "open",
         "timestamp": "2024-01-15 14:30",
@@ -270,12 +286,14 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     "queue_job_assigned": {
         "job_name": "Benchy.3mf",
         "printer": "Bambu X1C #1",
+        "printer_alias": "Workshop X1C #1",
         "target_model": "X1C",
         "timestamp": "2024-01-15 14:30",
         "app_name": "Bambuddy",
     },
     "queue_job_started": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "job_name": "Benchy.3mf",
         "estimated_time": "1h 23m",
         "eta": "15:53",
@@ -291,6 +309,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "queue_job_skipped": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "job_name": "Benchy.3mf",
         "reason": "Previous print failed",
         "timestamp": "2024-01-15 14:30",
@@ -298,6 +317,7 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     },
     "queue_job_failed": {
         "printer": "Bambu X1C",
+        "printer_alias": "Workshop X1C",
         "job_name": "Benchy.3mf",
         "reason": "Upload failed: connection timeout",
         "timestamp": "2024-01-15 14:30",
