@@ -1,0 +1,17 @@
+services:
+  bambuddy-sandbox:
+    build: .
+    image: bambuddy:sandbox-notification-alias
+    container_name: bambuddy-sandbox
+    ports:
+      - "8001:8000"
+    volumes:
+      - /data/friday/docker/bambuddy-sandbox/data:/app/data
+      - /data/friday/docker/bambuddy-sandbox/logs:/app/logs
+    environment:
+      - TZ=${TZ:-Europe/London}
+      - PUID=${PUID:-1001}
+      - PGID=${PGID:-999}
+      - PORT=8000
+    restart: unless-stopped
+    stop_grace_period: 30s

@@ -5543,12 +5543,9 @@ class TestHMSFullCode:
 
 
 class TestForceReconnectRouting:
-    """#1136 — force_reconnect_stale_session routes between hard-reset (full
-    paho-client teardown, wipes the QoS 1 queue) and socket-close (the legacy
-    behaviour, safe to call from paho's own network thread). The routing
-    decision is based on whether an asyncio loop is running: hard-reset
-    requires loop_stop() which would deadlock if called from inside the
-    network thread itself."""
+    """#1136 — synchronous recovery uses socket-close, while asynchronous
+    recovery performs the full client teardown in a worker to clear the QoS 1
+    queue without blocking the asyncio event loop."""
 
     @pytest.fixture
     def mqtt_client(self):
@@ -5574,22 +5571,29 @@ class TestForceReconnectRouting:
         # via paho's auto-reconnect handles it.
         assert mqtt_client._client is not None
 
-    def test_routing_uses_hard_reset_when_loop_is_running(self, mqtt_client):
-        """Async caller → loop available → hard-reset path wipes the queue."""
+    def test_sync_call_on_an_event_loop_uses_socket_close(self, mqtt_client):
+        """A synchronous caller must not block the event loop in loop_stop()."""
         import asyncio
 
         original = mqtt_client._client
-        # Stub connect() so the rebuild doesn't open a real socket.
-        mqtt_client.connect = lambda loop=None: None
 
         async def _trigger():
             mqtt_client.force_reconnect_stale_session("test")
 
         asyncio.run(_trigger())
+        original.socket().close.assert_called()
+        original.disconnect.assert_not_called()
+        original.loop_stop.assert_not_called()
+
+    def test_async_call_uses_hard_reset_off_event_loop(self, mqtt_client):
+        """Async recovery preserves the fresh-client reset in a worker."""
+        original = mqtt_client._client
+        mqtt_client.connect = lambda loop=None: None
+
+        asyncio.run(mqtt_client.force_reconnect_stale_session_async("test"))
+
         original.disconnect.assert_called()
         original.loop_stop.assert_called()
-        # connect() stub didn't repopulate _client, so it's None — the contract
-        # in production is that connect() builds a fresh mqtt.Client here.
         assert mqtt_client._client is None
 
     def test_marks_state_disconnected_and_broadcasts(self, mqtt_client):

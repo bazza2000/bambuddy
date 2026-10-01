@@ -196,3 +196,99 @@ class TestInjectPlateThumbnails:
         # Same object identity — second pass hits the no-op fast path
         # because every plate now has its plate_N.png.
         assert twice is once
+
+
+def _build_slicer_style_3mf(offsets: list[tuple[float, float, float]]) -> bytes:
+    """Sliced 3MF in the layout the BS/Orca CLI writes for a multi-part object.
+
+    ``3D/3dmodel.model`` holds one object whose components all point into a
+    single ``3D/Objects/object_1.model`` (``p:path``), one component per part.
+    Each part is a 1 mm cube, placed by its component transform at ``offsets[i]``.
+    """
+    ns = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"'
+    cube_vertices = "".join(
+        f'<vertex x="{x}" y="{y}" z="{z}"/>' for x in (0, 1) for y in (0, 1) for z in (0, 1)
+    )
+    cube_triangles = "".join(
+        f'<triangle v1="{a}" v2="{b}" v3="{c}"/>'
+        for a, b, c in [
+            (0, 1, 3), (0, 3, 2), (4, 6, 7), (4, 7, 5), (0, 4, 5), (0, 5, 1),
+            (2, 3, 7), (2, 7, 6), (0, 2, 6), (0, 6, 4), (1, 5, 7), (1, 7, 3),
+        ]
+    )
+    parts = "".join(
+        f'<object id="{i + 1}" type="model"><mesh><vertices>{cube_vertices}</vertices>'
+        f"<triangles>{cube_triangles}</triangles></mesh></object>"
+        for i in range(len(offsets))
+    )
+    components = "".join(
+        f'<component p:path="/3D/Objects/object_1.model" objectid="{i + 1}" '
+        f'transform="1 0 0 0 1 0 0 0 1 {x} {y} {z}"/>'
+        for i, (x, y, z) in enumerate(offsets)
+    )
+    top_id = len(offsets) + 1
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "3D/3dmodel.model",
+            f'<?xml version="1.0" encoding="UTF-8"?><model unit="millimeter" {ns}><resources>'
+            f'<object id="{top_id}" type="model"><components>{components}</components></object>'
+            f'</resources><build><item objectid="{top_id}" transform="1 0 0 0 1 0 0 0 1 100 100 0"/></build></model>',
+        )
+        zf.writestr(
+            "3D/Objects/object_1.model",
+            f'<?xml version="1.0" encoding="UTF-8"?><model unit="millimeter" {ns}><resources>{parts}</resources><build/></model>',
+        )
+        zf.writestr("Metadata/plate_1.gcode", b"; dummy gcode\n")
+    return buf.getvalue()
+
+
+@pytest.mark.skipif(not _trimesh_available(), reason="trimesh not installed")
+class TestLoad3mfMesh:
+    """The loader must resolve each component to its own object only.
+
+    trimesh.load loads every mesh of a ``p:path`` file once per component, so an
+    N-part slicer output became N*N parts; a 21-part plate needed ~9 GB of RAM
+    and OOM-killed the app mid-slice.
+    """
+
+    def test_each_component_contributes_only_its_own_part(self):
+        import trimesh
+
+        from backend.app.services.plate_thumbnail import _load_3mf_mesh
+
+        offsets = [(0, 0, 0), (10, 0, 0), (0, 20, 0), (5, 5, 3)]
+        mesh = _load_3mf_mesh(_build_slicer_style_3mf(offsets), trimesh)
+
+        assert len(mesh.faces) == 12 * len(offsets)
+        assert len(mesh.vertices) == 8 * len(offsets)
+
+    def test_component_and_build_transforms_are_applied(self):
+        import trimesh
+
+        from backend.app.services.plate_thumbnail import _load_3mf_mesh
+
+        mesh = _load_3mf_mesh(_build_slicer_style_3mf([(0, 0, 0), (10, 0, 0), (0, 20, 3)]), trimesh)
+
+        # build item moves everything by (100, 100, 0); the parts span 11 x 21 x 4 mm
+        assert mesh.bounds.tolist() == [[100.0, 100.0, 0.0], [111.0, 121.0, 4.0]]
+
+    def test_matches_trimesh_on_single_file_models(self):
+        import trimesh
+
+        from backend.app.services.plate_thumbnail import _load_3mf_mesh
+
+        fixture = _build_sliced_3mf(plate_ids=[1])
+        ours = _load_3mf_mesh(fixture, trimesh)
+        theirs = trimesh.load(io.BytesIO(fixture), file_type="3mf", force="mesh")
+
+        assert len(ours.faces) == len(theirs.faces)
+        assert ours.bounds.tolist() == theirs.bounds.tolist()
+
+    def test_injects_thumbnail_for_slicer_style_output(self):
+        from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
+
+        fixture = _build_slicer_style_3mf([(0, 0, 0), (10, 0, 0)])
+        result = inject_plate_thumbnails_if_missing(fixture)
+
+        assert "Metadata/plate_1.png" in _names_in_zip(result)

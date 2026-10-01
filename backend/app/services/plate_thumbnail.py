@@ -154,7 +154,7 @@ def _render_model_thumbnails(threemf_bytes: bytes) -> tuple[bytes | None, bytes 
     from matplotlib.colors import LightSource
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    loaded = trimesh.load(io.BytesIO(threemf_bytes), file_type="3mf", force="mesh")
+    loaded = _load_3mf_mesh(threemf_bytes, trimesh)
     if loaded is None or not hasattr(loaded, "vertices") or len(loaded.vertices) == 0:
         logger.debug("plate_thumbnail: trimesh produced empty mesh from 3MF")
         return None, None
@@ -198,6 +198,85 @@ def _render_model_thumbnails(threemf_bytes: bytes) -> tuple[bytes | None, bytes 
     large = _render_at_size(poly3d, _PLATE_PNG_SIZE, plt, Poly3DCollection, shade_kw)
     small = _render_at_size(poly3d, _PLATE_PNG_SMALL_SIZE, plt, Poly3DCollection, shade_kw)
     return large, small
+
+
+def _load_3mf_mesh(threemf_bytes: bytes, trimesh):
+    """Load a 3MF's build items as one mesh, resolving each component by id.
+
+    Not ``trimesh.load``: its 3MF loader (still true in 5.1.0) ignores a
+    component's ``objectid`` when the component points into another model
+    file via ``p:path``, and loads *every* mesh in that file for *each*
+    component. Slicer CLI output always stores parts that way (one
+    ``3D/Objects/object_N.model`` holding all N parts, referenced N times),
+    so a 21-part plate became 441 copies of its geometry, ~9 GB of RAM, and
+    an OOM kill of the whole app in the middle of a pipeline slice.
+
+    Each model file is parsed once, geometry is read once per object, and the
+    component/build transforms are applied the same way trimesh would.
+    Returns ``None`` when the 3MF has no geometry.
+    """
+    import numpy as np
+    from lxml import etree
+    from trimesh.exchange.threemf import _attrib_to_transform, _read_mesh
+
+    root_path = "3D/3dmodel.model"
+    with zipfile.ZipFile(io.BytesIO(threemf_bytes), "r") as zf:
+        names = {n.lower(): n for n in zf.namelist()}
+        parsed: dict[str, tuple[dict, list]] = {}
+
+        def parse(path: str) -> tuple[dict, list]:
+            key = path.strip("/").lower()
+            if key not in parsed:
+                # object id -> (vertices, faces) or [(path, objectid, transform), ...]
+                objects: dict = {}
+                items: list = []
+                with zf.open(names[key]) as fh:
+                    for _, el in etree.iterparse(
+                        fh, tag=("{*}object", "{*}build"), events=("end",), huge_tree=True
+                    ):
+                        if el.tag.endswith("object"):
+                            mesh = next(el.iter("{*}mesh"), None)
+                            if mesh is not None:
+                                objects[el.attrib["id"]] = _read_mesh(mesh)
+                            else:
+                                objects[el.attrib["id"]] = [
+                                    (
+                                        next((v for k, v in c.attrib.items() if k.endswith("path")), None) or key,
+                                        c.attrib["objectid"],
+                                        _attrib_to_transform(c.attrib),
+                                    )
+                                    for c in el.iter("{*}component")
+                                ]
+                            el.clear()
+                        else:
+                            items = [(i.attrib["objectid"], _attrib_to_transform(i.attrib)) for i in el.iter("{*}item")]
+                parsed[key] = (objects, items)
+            return parsed[key]
+
+        vertices: list = []
+        faces: list = []
+        offset = 0
+
+        def add(path: str, object_id: str, transform, depth: int = 0) -> None:
+            nonlocal offset
+            if depth > 16:  # malformed or cyclic component graph
+                return
+            obj = parse(path)[0].get(object_id)
+            if isinstance(obj, tuple):
+                v, f = obj
+                vertices.append(trimesh.transformations.transform_points(v, transform))
+                faces.append(f + offset)
+                offset += len(v)
+            elif obj:
+                for child_path, child_id, child_transform in obj:
+                    add(child_path, child_id, transform @ child_transform, depth + 1)
+
+        for object_id, transform in parse(root_path)[1]:
+            add(root_path, object_id, transform)
+
+    if not vertices:
+        return None
+    return trimesh.Trimesh(vertices=np.vstack(vertices), faces=np.vstack(faces))
 
 
 def _render_at_size(poly3d, size: int, plt, Poly3DCollection, shade_kw: dict) -> bytes:

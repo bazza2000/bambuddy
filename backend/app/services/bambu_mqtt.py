@@ -1576,9 +1576,8 @@ class BambuMQTTClient:
             self.state.connected = False
             if self.on_state_change:
                 self.on_state_change(self.state)
-            # Route based on caller thread — see force_reconnect_stale_session.
-            # check_staleness is normally called from FastAPI handlers (async,
-            # gets the hard-reset path) but the dispatcher exists for safety.
+            # Synchronous status reads use socket-close so paho's thread join
+            # cannot block the request handling event loop.
             self._stale_reconnecting = True
             self._reset_client_for_reconnect()
         return self.state.connected
@@ -1587,24 +1586,10 @@ class BambuMQTTClient:
         # Heals the #887/#936/#1136 half-broken session: telemetry keeps
         # arriving but our publishes don't reach the printer.
         #
-        # Two routing paths:
-        #
-        # Async-context callers (queue dispatch deadline)
-        #   → full client teardown + fresh client_id. Wipes paho's client-side
-        #     QoS 1 queue, which is exactly the #1136 reproducer: an unacked
-        #     `project_file` from the broken session would otherwise replay on
-        #     reconnect, mixing stale commands into the next dispatch and
-        #     triggering 0500_4003 SD R/W on the printer.
-        #
-        # Paho-network-thread callers (line ~2604/~2623 — dev-mode probe and
-        # ams_filament_setting zombie detection inside `_update_state`)
-        #   → socket-close fallback. Calling `loop_stop()` from inside the
-        #     network thread would self-join and deadlock; the safe pattern is
-        #     to close the socket and let paho's own loop detect the broken
-        #     connection and auto-reconnect (same instance, same client_id —
-        #     queue replay is theoretically possible here but those paths have
-        #     always done socket-close and #1136 was specifically triggered
-        #     from the dispatch path).
+        # Synchronous callers, including paho's network thread, use socket-close
+        # so ``loop_stop()`` can never block or self-join. Async recovery callers
+        # that must clear the QoS 1 queue use
+        # ``force_reconnect_stale_session_async`` instead.
         logger.warning("[%s] Forcing MQTT reconnect: %s", self.serial_number, reason)
         self._stale_reconnecting = True
         self.state.connected = False
@@ -1612,24 +1597,30 @@ class BambuMQTTClient:
             self.on_state_change(self.state)
         self._reset_client_for_reconnect()
 
+    async def force_reconnect_stale_session_async(self, reason: str) -> None:
+        """Rebuild a stale MQTT session without blocking the asyncio event loop.
+
+        ``paho.Client.loop_stop()`` waits for its network thread without a timeout.
+        A stale socket can leave that thread blocked indefinitely, so the full reset
+        must run in a worker rather than preventing every HTTP request from running.
+        """
+        logger.warning("[%s] Forcing MQTT reconnect: %s", self.serial_number, reason)
+        self._stale_reconnecting = True
+        self.state.connected = False
+        if self.on_state_change:
+            self.on_state_change(self.state)
+
+        self._loop = asyncio.get_running_loop()
+        await asyncio.to_thread(self._hard_reset_client)
+
     def _reset_client_for_reconnect(self) -> None:
         """Route between hard-reset and socket-close based on caller thread.
 
-        Hard-reset (preferred) requires we're not running on paho's network
-        thread, since `loop_stop()` on the same thread deadlocks. Detect via
-        ``asyncio.get_running_loop()`` — paho's callback thread has no loop;
-        every legitimate hard-reset caller (FastAPI handlers, background
-        async tasks) does."""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is not None:
-            self._loop = loop
-            self._hard_reset_client()
-        else:
-            self._socket_close_for_reconnect()
+        A full reset requires ``loop_stop()``, which can block indefinitely while
+        joining paho's network thread. Synchronous callers use the socket-close
+        fallback; asynchronous callers needing a fresh client use
+        :meth:`force_reconnect_stale_session_async`."""
+        self._socket_close_for_reconnect()
 
     def _hard_reset_client(self) -> None:
         """Tear down the paho client entirely and rebuild it with a fresh

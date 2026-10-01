@@ -7147,8 +7147,8 @@ class PrintScheduler:
                 current_gcode_file,
                 pre_gcode_file,
             )
-        elif client and hasattr(client, "force_reconnect_stale_session"):
-            client.force_reconnect_stale_session(
+        elif client and hasattr(client, "force_reconnect_stale_session_async"):
+            await client.force_reconnect_stale_session_async(
                 f"queue print command unacknowledged after {timeout:.0f}s "
                 f"(state still {pre_state}, gcode_file {current_gcode_file!r})"
             )

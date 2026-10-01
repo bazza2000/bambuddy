@@ -127,7 +127,7 @@ class TestWatchdogRevertsWhenStuck:
         """Both signals unchanged across the full timeout → revert to pending
         and force MQTT reconnect (the #967 recovery path)."""
         get_status = MagicMock(return_value=_status("FINISH", "OLD_SUBTASK"))
-        client = MagicMock()
+        client = SimpleNamespace(force_reconnect_stale_session_async=AsyncMock())
         get_client = MagicMock(return_value=client)
 
         with (
@@ -150,7 +150,7 @@ class TestWatchdogRevertsWhenStuck:
             assert item.status == "pending"
             assert item.started_at is None
 
-        client.force_reconnect_stale_session.assert_called_once()
+        client.force_reconnect_stale_session_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_reverts_on_finish_to_idle_user_dismissed_prompt(self, db_session):
@@ -171,7 +171,7 @@ class TestWatchdogRevertsWhenStuck:
         landed" signal.
         """
         get_status = MagicMock(return_value=_status("IDLE", "OLD_SUBTASK"))
-        client = MagicMock()
+        client = SimpleNamespace(force_reconnect_stale_session_async=AsyncMock())
         get_client = MagicMock(return_value=client)
 
         with (
@@ -270,7 +270,7 @@ class TestWatchdogRevertsWhenStuck:
         get_status = MagicMock(
             return_value=_status("IDLE", "NEW_SUBTASK_12345", gcode_file="/new.3mf"),
         )
-        client = MagicMock()  # NOT None — must verify reconnect isn't called
+        client = SimpleNamespace(force_reconnect_stale_session_async=AsyncMock())
         get_client = MagicMock(return_value=client)
 
         with (
@@ -301,7 +301,7 @@ class TestWatchdogRevertsWhenStuck:
 
         # File landed (subtask_id advance proves this), so a forced reconnect
         # would trigger 0500_4003 mid-parse (#1150) — skip.
-        client.force_reconnect_stale_session.assert_not_called()
+        client.force_reconnect_stale_session_async.assert_not_awaited()
 
 
 class TestWatchdogFallbackBehaviour:
@@ -403,7 +403,7 @@ class TestWatchdogFallbackBehaviour:
             await db.commit()
 
         get_status = MagicMock(return_value=_status("FINISH", "OLD_SUBTASK"))
-        client = MagicMock()  # NOT None — must verify reconnect isn't called
+        client = SimpleNamespace(force_reconnect_stale_session_async=AsyncMock())
         get_client = MagicMock(return_value=client)
 
         with (
@@ -425,7 +425,7 @@ class TestWatchdogFallbackBehaviour:
             item = await db.get(PrintQueueItem, 1)
             assert item.status == "completed"  # untouched
 
-        client.force_reconnect_stale_session.assert_not_called()
+        client.force_reconnect_stale_session_async.assert_not_awaited()
 
 
 class TestGcodeFileDiscriminator:
@@ -439,7 +439,7 @@ class TestGcodeFileDiscriminator:
         get_status = MagicMock(
             return_value=_status("FINISH", "OLD_SUBTASK", gcode_file="/new.3mf"),
         )
-        client = MagicMock()
+        client = SimpleNamespace(force_reconnect_stale_session_async=AsyncMock())
         get_client = MagicMock(return_value=client)
 
         with (
@@ -463,14 +463,14 @@ class TestGcodeFileDiscriminator:
         async with db_session() as db:
             item = await db.get(PrintQueueItem, 1)
             assert item.status == "pending"
-        client.force_reconnect_stale_session.assert_not_called()
+        client.force_reconnect_stale_session_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_reconnects_when_gcode_file_unchanged(self, db_session):
         get_status = MagicMock(
             return_value=_status("FINISH", "OLD_SUBTASK", gcode_file="/old.3mf"),
         )
-        client = MagicMock()
+        client = SimpleNamespace(force_reconnect_stale_session_async=AsyncMock())
         get_client = MagicMock(return_value=client)
 
         with (
@@ -489,7 +489,7 @@ class TestGcodeFileDiscriminator:
                 poll_interval=0.05,
             )
 
-        client.force_reconnect_stale_session.assert_called_once()
+        client.force_reconnect_stale_session_async.assert_awaited_once()
 
 
 class TestWatchdogRetryBudget:

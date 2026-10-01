@@ -33,7 +33,7 @@ def _client(*, connected: bool, last_message_age: float | None, ip: str = "192.1
         _last_message_time=0.0 if last_message_age is None else time.time() - last_message_age,
         ip_address=ip,
         last_connect_error=None,
-        force_reconnect_stale_session=MagicMock(),
+        force_reconnect_stale_session_async=AsyncMock(),
     )
 
 
@@ -59,13 +59,13 @@ class TestRebuildsDeadSessions:
         client = _client(connected=False, last_message_age=32718.0)
 
         assert await _sweep({1: client}) == 1
-        client.force_reconnect_stale_session.assert_called_once()
+        client.force_reconnect_stale_session_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_reconnect_reason_names_the_duration(self):
         client = _client(connected=False, last_message_age=32718.0)
         await _sweep({1: client})
-        assert "32718" in client.force_reconnect_stale_session.call_args.args[0]
+        assert "32718" in client.force_reconnect_stale_session_async.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_sweeps_every_printer_in_the_farm(self):
@@ -78,7 +78,7 @@ class TestLeavesHealthyAndRecoveringSessionsAlone:
     async def test_connected_printer_is_untouched(self):
         client = _client(connected=True, last_message_age=99999.0)
         assert await _sweep({1: client}) == 0
-        client.force_reconnect_stale_session.assert_not_called()
+        client.force_reconnect_stale_session_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_inside_the_grace_period_paho_keeps_the_job(self):
@@ -86,7 +86,7 @@ class TestLeavesHealthyAndRecoveringSessionsAlone:
         it would turn a self-healing blip into a forced session rebuild."""
         client = _client(connected=False, last_message_age=CONNECTION_WATCHDOG_OFFLINE_GRACE - 30)
         assert await _sweep({1: client}) == 0
-        client.force_reconnect_stale_session.assert_not_called()
+        client.force_reconnect_stale_session_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_client_that_never_had_a_session_is_left_to_paho(self):
@@ -94,7 +94,7 @@ class TestLeavesHealthyAndRecoveringSessionsAlone:
         retrying is both correct and the only thing to do."""
         client = _client(connected=False, last_message_age=None)
         assert await _sweep({1: client}) == 0
-        client.force_reconnect_stale_session.assert_not_called()
+        client.force_reconnect_stale_session_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_reconnecting_clears_the_cooldown(self):
@@ -116,7 +116,7 @@ class TestUnreachablePrinters:
         nothing and would log a warning per printer all night."""
         client = _client(connected=False, last_message_age=9999.0)
         assert await _sweep({1: client}, port_open=False) == 0
-        client.force_reconnect_stale_session.assert_not_called()
+        client.force_reconnect_stale_session_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_unreachable_printer_still_takes_the_cooldown(self):
@@ -132,7 +132,7 @@ class TestRetryInterval:
         client = _client(connected=False, last_message_age=9999.0)
         assert await _sweep({1: client}) == 1
         assert await _sweep({1: client}) == 0
-        client.force_reconnect_stale_session.assert_called_once()
+        client.force_reconnect_stale_session_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_retries_once_the_interval_has_passed(self):
@@ -141,7 +141,7 @@ class TestRetryInterval:
         _connection_watchdog_last_attempt[1] -= CONNECTION_WATCHDOG_RETRY_INTERVAL + 1
 
         assert await _sweep({1: client}) == 1
-        assert client.force_reconnect_stale_session.call_count == 2
+        assert client.force_reconnect_stale_session_async.await_count == 2
 
 
 class TestSweepIsFaultTolerant:
@@ -150,8 +150,8 @@ class TestSweepIsFaultTolerant:
         """A farm sweep that aborts on the first bad client would leave every
         printer after it unrecovered."""
         bad = _client(connected=False, last_message_age=9999.0)
-        bad.force_reconnect_stale_session.side_effect = RuntimeError("boom")
+        bad.force_reconnect_stale_session_async.side_effect = RuntimeError("boom")
         good = _client(connected=False, last_message_age=9999.0)
 
         assert await _sweep({1: bad, 2: good}) == 2
-        good.force_reconnect_stale_session.assert_called_once()
+        good.force_reconnect_stale_session_async.assert_awaited_once()

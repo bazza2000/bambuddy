@@ -8525,7 +8525,9 @@ async def _recover_dead_printer_sessions() -> int:
             # paho's QoS 1 queue dropped. That matters — a project_file left
             # unacked on the dead session would otherwise replay into the new
             # one and trip 0500_4003 on the printer (#1136).
-            client.force_reconnect_stale_session(f"offline for {offline_for:.0f}s, port still answering")
+            await client.force_reconnect_stale_session_async(
+                f"offline for {offline_for:.0f}s, port still answering"
+            )
         except Exception as e:
             logger.warning("[#2732] Connection watchdog failed for printer %s: %s", printer_id, e)
 
