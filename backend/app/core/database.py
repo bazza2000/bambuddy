@@ -1769,6 +1769,13 @@ async def run_migrations(conn):
         "ALTER TABLE pipeline_runs ADD COLUMN source_archive_id INTEGER REFERENCES print_archives(id) ON DELETE SET NULL",
     )
 
+    # Migration: Add force_color_match column to pipeline_runs. Lets a run queue
+    # its copies with force_color_match filament overrides. Idempotent.
+    await _safe_execute(
+        conn,
+        "ALTER TABLE pipeline_runs ADD COLUMN force_color_match BOOLEAN DEFAULT 0",
+    )
+
     # Migration: Add is_favorite column to print_archives
     await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
 

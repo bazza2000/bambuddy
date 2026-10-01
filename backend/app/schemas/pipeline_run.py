@@ -97,6 +97,15 @@ class PipelineRunCreateRequest(BaseModel):
             "even when issues exist — recorded on PipelineRun.eligibility_overridden."
         ),
     )
+    force_color_match: bool = Field(
+        default=False,
+        description=(
+            "When True, each copy is queued with force_color_match on the sliced "
+            "plate's filaments: it waits until a printer has every one of those "
+            "colours (and PLA variants) loaded, rather than printing whatever is in "
+            "the matching AMS slots."
+        ),
+    )
 
     @model_validator(mode="after")
     def exactly_one_source(self) -> "PipelineRunCreateRequest":
@@ -154,6 +163,7 @@ class PipelineRunResponse(BaseModel):
     slice_job_id: int | None
     sliced_library_file_id: int | None
     eligibility_overridden: bool
+    force_color_match: bool = False
     error_message: str | None = None
     created_by: int | None
     created_at: datetime

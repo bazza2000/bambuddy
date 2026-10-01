@@ -68,6 +68,11 @@ class PipelineRun(Base):
     # shows which runs bypassed the pre-flight.
     eligibility_overridden: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
+    # Queue each copy with force_color_match on its filaments, so the scheduler
+    # only dispatches to a printer that has the plate's exact colours loaded
+    # instead of mapping slot N to AMS slot N by filament type alone.
+    force_color_match: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+
     error_message: Mapped[str | None] = mapped_column(Text)
 
     created_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))

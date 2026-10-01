@@ -57,6 +57,7 @@ from backend.app.schemas.pipeline_run import (
     PipelineRunResponse,
 )
 from backend.app.schemas.slicer import PresetRef, SliceRequest
+from backend.app.services.filament_requirements import extract_filament_requirements
 from backend.app.services.pipeline_eligibility import (
     EligibilityReport,
     check_pipeline_eligibility,
@@ -332,6 +333,7 @@ async def _materialise_run(db: AsyncSession, run: PipelineRun) -> PipelineRunRes
         slice_job_id=run.slice_job_id,
         sliced_library_file_id=run.sliced_library_file_id,
         eligibility_overridden=run.eligibility_overridden,
+        force_color_match=bool(run.force_color_match),
         error_message=run.error_message,
         created_by=run.created_by,
         created_at=run.created_at,
@@ -460,6 +462,44 @@ async def _pick_assignments(
     return [(None, pipeline.target_model_class)] * copies
 
 
+def _queue_filament_fields(sliced_path: Path | None, force_color_match: bool) -> tuple[str | None, str | None]:
+    """``(required_filament_types, filament_overrides)`` JSON for a pipeline copy's
+    queue item, read from the sliced 3MF the same way the virtual printer's queue
+    mode does (#1188).
+
+    The filament types are always recorded so the scheduler can skip printers
+    without them. With ``force_color_match`` each filament also becomes a forced
+    override (type, colour and ``tray_info_idx`` for the PLA variant, #2650), so
+    the copy waits for a printer with those exact colours. Without it the
+    scheduler maps filaments by type only, and a plate of all-PLA filaments
+    prints with whatever colours happen to sit in the matching AMS slots.
+    Returns ``(None, None)`` when the file is missing or unreadable.
+    """
+    if sliced_path is None:
+        return None, None
+    requirements = extract_filament_requirements(sliced_path)
+    types = sorted({r["type"] for r in requirements if r.get("type")})
+    types_json = json.dumps(types) if types else None
+    overrides_json = None
+    if force_color_match:
+        overrides = [
+            {
+                "slot_id": r["slot_id"],
+                "type": r.get("type", ""),
+                "color": r.get("color", ""),
+                "tray_info_idx": r.get("tray_info_idx", ""),
+                "force_color_match": True,
+            }
+            for r in requirements
+            if r.get("type") and r.get("color")
+        ]
+        if overrides:
+            overrides_json = json.dumps(overrides)
+        else:
+            logger.warning("force_color_match requested but %s has no filament colours to match", sliced_path.name)
+    return types_json, overrides_json
+
+
 def _make_orchestration_callable(
     *,
     run_id: int,
@@ -557,6 +597,15 @@ def _make_orchestration_callable(
             # PR C: enqueue N copies per the picked assignment strategy.
             assignments = await _pick_assignments(session, pipeline, copies)
 
+            # Every copy prints the same sliced plate, so read its filaments once.
+            sliced = (
+                await session.execute(select(LibraryFile).where(LibraryFile.id == slice_response.library_file_id))
+            ).scalar_one_or_none()
+            required_types_json, overrides_json = _queue_filament_fields(
+                Path(app_settings.base_dir) / sliced.file_path if sliced is not None else None,
+                bool(run.force_color_match),
+            )  # SEC-PATH-OK: sliced.file_path is a LibraryFile DB column written by slice_and_persist under base_dir/library_files/.
+
             jobs = (
                 (
                     await session.execute(
@@ -578,6 +627,8 @@ def _make_orchestration_callable(
                     library_file_id=slice_response.library_file_id,
                     created_by_id=creator_user_id,
                     status="pending",
+                    required_filament_types=required_types_json,
+                    filament_overrides=overrides_json,
                 )
                 session.add(queue_item)
                 await session.flush()
@@ -725,6 +776,7 @@ async def run_pipeline(
         copies=body.copies,
         status="queued",
         eligibility_overridden=(not report.ok and body.force),
+        force_color_match=body.force_color_match,
         created_by=creator.id if creator else None,
     )
     db.add(run)
@@ -966,6 +1018,7 @@ async def retry_failed(
         source_archive_id=parent.source_archive_id,
         copies=fail_count,
         force=True,  # operator already accepted eligibility on the parent
+        force_color_match=bool(parent.force_color_match),
     )
 
     # Reuse the run_pipeline route logic via a direct call — keeps the

@@ -1189,3 +1189,134 @@ class TestRunViaApiKey:
 
         assert resp.status_code == 202, resp.text
         assert enqueue.await_args.kwargs["owner_id"] is None
+
+
+class TestForceColorMatch:
+    """``force_color_match`` on a run: recorded, kept by retries, and put on every copy's
+    queue item so the scheduler only dispatches to a printer with the plate's exact colours."""
+
+    pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+
+    @pytest.fixture
+    def _fake_slice_job(self):
+        from dataclasses import dataclass
+
+        @dataclass
+        class _FakeSliceJob:
+            id: int = 4242
+
+        return _FakeSliceJob()
+
+    async def test_run_records_force_color_match(
+        self, async_client: AsyncClient, pipeline_factory, printer_factory, library_file_factory, _fake_slice_job
+    ):
+        printer = await printer_factory()
+        pipeline = await pipeline_factory(target_printer_id=printer.id)
+        src = await library_file_factory()
+        live_status = {"connected": True, "raw_data": {"ams": []}}
+        with (
+            patch("backend.app.api.routes.pipeline_runs._load_printer_status", new=AsyncMock(return_value=live_status)),
+            patch("backend.app.services.slice_dispatch.slice_dispatch.enqueue", new=AsyncMock(return_value=_fake_slice_job)),
+        ):
+            forced = await async_client.post(
+                f"/api/v1/slicer-pipelines/{pipeline['id']}/run",
+                json={"source_library_file_id": src.id, "force_color_match": True},
+            )
+            plain = await async_client.post(
+                f"/api/v1/slicer-pipelines/{pipeline['id']}/run",
+                json={"source_library_file_id": src.id},
+            )
+        assert forced.status_code == 202, forced.text
+        assert forced.json()["force_color_match"] is True
+        assert plain.status_code == 202, plain.text
+        assert plain.json()["force_color_match"] is False
+
+    async def test_retry_failed_keeps_force_color_match(
+        self, async_client: AsyncClient, pipeline_factory, printer_factory, library_file_factory, db_session, _fake_slice_job
+    ):
+        from backend.app.models.pipeline_run import PipelineJob, PipelineRun
+
+        printer = await printer_factory()
+        pipeline = await pipeline_factory(target_printer_id=printer.id)
+        src = await library_file_factory()
+        parent = PipelineRun(
+            pipeline_id=pipeline["id"], source_library_file_id=src.id, copies=1, status="failed", force_color_match=True
+        )
+        db_session.add(parent)
+        await db_session.flush()
+        db_session.add(PipelineJob(pipeline_run_id=parent.id, copy_index=0, status="failed"))
+        await db_session.commit()
+
+        live_status = {"connected": True, "raw_data": {"ams": []}}
+        with (
+            patch("backend.app.api.routes.pipeline_runs._load_printer_status", new=AsyncMock(return_value=live_status)),
+            patch("backend.app.services.slice_dispatch.slice_dispatch.enqueue", new=AsyncMock(return_value=_fake_slice_job)),
+        ):
+            resp = await async_client.post(f"/api/v1/pipeline-runs/{parent.id}/retry-failed")
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["force_color_match"] is True
+
+    @pytest.mark.parametrize("force", [True, False])
+    async def test_copies_are_queued_with_the_sliced_plates_filaments(
+        self, async_client: AsyncClient, pipeline_factory, printer_factory, library_file_factory, db_session,
+        _fake_slice_job, force,
+    ):
+        import json
+        import zipfile
+        from pathlib import Path
+
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from backend.app.core.config import settings as app_settings
+        from backend.app.models.print_queue import PrintQueueItem
+        from backend.app.schemas.slicer import SliceResponse
+
+        printer = await printer_factory()
+        pipeline = await pipeline_factory(target_printer_id=printer.id)
+        src = await library_file_factory()
+        sliced = await library_file_factory(filename="name_tag.gcode.3mf")
+        filaments = "".join(
+            f'<filament id="{i}" type="PLA" color="{c}" used_g="5" tray_info_idx="GFA00"/>'
+            for i, c in enumerate(["#00AE42", "#FFFFFF", "#FEC600"], start=1)
+        )
+        with zipfile.ZipFile(Path(app_settings.base_dir) / sliced.file_path, "w") as zf:
+            zf.writestr(
+                "Metadata/slice_info.config",
+                f'<?xml version="1.0" encoding="utf-8"?><config><plate><metadata key="index" value="1"/>{filaments}</plate></config>',
+            )
+
+        live_status = {"connected": True, "raw_data": {"ams": []}}
+        enqueue = AsyncMock(return_value=_fake_slice_job)
+        with (
+            patch("backend.app.api.routes.pipeline_runs._load_printer_status", new=AsyncMock(return_value=live_status)),
+            patch("backend.app.services.slice_dispatch.slice_dispatch.enqueue", new=enqueue),
+        ):
+            resp = await async_client.post(
+                f"/api/v1/slicer-pipelines/{pipeline['id']}/run",
+                json={"source_library_file_id": src.id, "force_color_match": force},
+            )
+        assert resp.status_code == 202, resp.text
+        orchestrate = enqueue.call_args.kwargs["run"]
+
+        test_session = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+        slice_response = SliceResponse(
+            library_file_id=sliced.id, name=sliced.filename, print_time_seconds=60, filament_used_g=15.0, filament_used_mm=5000.0
+        )
+        with (
+            patch("backend.app.api.routes.pipeline_runs.async_session", test_session),
+            patch("backend.app.api.routes.library.slice_and_persist", new=AsyncMock(return_value=slice_response)),
+            patch("backend.app.api.routes.pipeline_runs._publish_run_event", new=AsyncMock()),
+        ):
+            await orchestrate(_fake_slice_job.id)
+
+        item = (
+            await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.library_file_id == sliced.id))
+        ).scalar_one()
+        assert json.loads(item.required_filament_types) == ["PLA"]
+        if force:
+            overrides = json.loads(item.filament_overrides)
+            assert [o["color"].upper()[:7] for o in overrides] == ["#00AE42", "#FFFFFF", "#FEC600"]
+            assert all(o["force_color_match"] for o in overrides)
+        else:
+            assert item.filament_overrides is None
