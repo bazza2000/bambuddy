@@ -1314,6 +1314,8 @@ class TestForceColorMatch:
             await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.library_file_id == sliced.id))
         ).scalar_one()
         assert json.loads(item.required_filament_types) == ["PLA"]
+        # the plate it prints, so the queue edit dialog keeps the overrides it shows
+        assert item.plate_id == 1
         if force:
             overrides = json.loads(item.filament_overrides)
             assert [o["color"].upper()[:7] for o in overrides] == ["#00AE42", "#FFFFFF", "#FEC600"]

@@ -462,6 +462,13 @@ async def _pick_assignments(
     return [(None, pipeline.target_model_class)] * copies
 
 
+# Pipeline copies print the sliced file's first plate: the dispatcher already prints
+# ``item.plate_id or 1``. Recording it on the queue item also keeps the queue's edit
+# dialog from treating its auto-selection of plate 1 as a plate change, which cleared
+# the item's filament overrides and Force color match ticks in the form.
+PIPELINE_PLATE_ID = 1
+
+
 def _queue_filament_fields(sliced_path: Path | None, force_color_match: bool) -> tuple[str | None, str | None]:
     """``(required_filament_types, filament_overrides)`` JSON for a pipeline copy's
     queue item, read from the sliced 3MF the same way the virtual printer's queue
@@ -473,11 +480,14 @@ def _queue_filament_fields(sliced_path: Path | None, force_color_match: bool) ->
     the copy waits for a printer with those exact colours. Without it the
     scheduler maps filaments by type only, and a plate of all-PLA filaments
     prints with whatever colours happen to sit in the matching AMS slots.
-    Returns ``(None, None)`` when the file is missing or unreadable.
+    Only the printed plate's filaments count (a plate-less slice_info falls back to
+    the whole file). Returns ``(None, None)`` when the file is missing or unreadable.
     """
     if sliced_path is None:
         return None, None
-    requirements = extract_filament_requirements(sliced_path)
+    requirements = extract_filament_requirements(sliced_path, PIPELINE_PLATE_ID) or extract_filament_requirements(
+        sliced_path
+    )
     types = sorted({r["type"] for r in requirements if r.get("type")})
     types_json = json.dumps(types) if types else None
     overrides_json = None
@@ -627,6 +637,7 @@ def _make_orchestration_callable(
                     library_file_id=slice_response.library_file_id,
                     created_by_id=creator_user_id,
                     status="pending",
+                    plate_id=PIPELINE_PLATE_ID,
                     required_filament_types=required_types_json,
                     filament_overrides=overrides_json,
                 )

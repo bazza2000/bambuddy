@@ -57,6 +57,17 @@ class TestQueueFilamentFields:
         bad.write_bytes(b"not a zip")
         assert _queue_filament_fields(bad, True) == (None, None)
 
+    def test_only_the_printed_plates_filaments_are_forced(self, tmp_path: Path):
+        f = tmp_path / "two_plates.3mf"
+        plate = '<plate><metadata key="index" value="{n}"/><filament id="{i}" type="PLA" color="{c}" used_g="5" tray_info_idx="GFA00"/></plate>'
+        config = '<?xml version="1.0" encoding="utf-8"?><config>' + plate.format(n=1, i=1, c="#C12E1F") + plate.format(n=2, i=2, c="#0086D6") + "</config>"
+        with zipfile.ZipFile(f, "w") as zf:
+            zf.writestr("Metadata/slice_info.config", config)
+
+        _, overrides_json = _queue_filament_fields(f, True)
+
+        assert [(o["slot_id"], o["color"].upper()[:7]) for o in json.loads(overrides_json)] == [(1, "#C12E1F")]
+
     def test_filaments_without_a_colour_are_not_forced(self, tmp_path: Path):
         f = _sliced_3mf(tmp_path / "plate.3mf", [{"id": "1", "type": "PLA", "color": ""}])
 
